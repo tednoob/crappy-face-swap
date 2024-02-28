@@ -8,12 +8,10 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 Frame = np.ndarray[Any, Any]
+PROVIDERS = ["CUDAExecutionProvider", "CoreMLExecutionProvider", "CPUExecutionProvider"]
 HAS_CUDA = "CUDAExecutionProvider" in onnxruntime.get_available_providers()
-
-
-def exit_with_error(msg: str):
-    logger.error(f"Error: {msg}")
-    sys.exit(1)
+HAS_METAL = "CoreMLExecutionProvider" in onnxruntime.get_available_providers()
+HAS_GPU = HAS_CUDA or HAS_METAL
 
 
 def normalize_path(path: str) -> str:
@@ -33,4 +31,6 @@ def is_image(file: str) -> bool:
 
 def is_video(file: str) -> bool:
     """Checks if a file is a video."""
-    return file.lower().endswith((".mp4", ".avi", ".mov", ".mkv", ".wmv", ".m4v"))
+    return file.lower().endswith(
+        (".mp4", ".avi", ".mov", ".mkv", ".wmv", ".m4v", ".webm")
+    )

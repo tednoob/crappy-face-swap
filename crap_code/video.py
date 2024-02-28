@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import ffmpeg
 import numpy as np
-from .util import Frame, HAS_CUDA
+from .util import Frame, HAS_GPU
 
 if TYPE_CHECKING:
     from .image import FaceSwap
@@ -93,7 +93,7 @@ class MediaDirector(object):
             "0:v?",
             "-map",
             "1:a?",
-            self.out_filename,
+            self.out_filename.replace(".webm", ".mp4"),
             "-y",
         ]
         self.output_process = subprocess.Popen(args, stdin=subprocess.PIPE)
@@ -129,7 +129,7 @@ class MediaDirector(object):
         )
 
     def run(self):
-        max_threads = 8 if HAS_CUDA else 1
+        max_threads = 8 if HAS_GPU else 1
         self.start_ffmpeg_input_process()
         self.start_ffmpeg_output_process()
         frame = 0
@@ -208,5 +208,3 @@ class MediaDirector(object):
         logger.info("Waiting for ffmpeg output process")
         self.output_process.stdin.close()
         self.output_process.wait()
-
-        logger.info("Done")

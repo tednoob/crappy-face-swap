@@ -1,9 +1,10 @@
+import os
 import sys
 import cv2
 import signal
 import logging
 import threading
-from typing import Any, Optional
+from typing import Optional
 
 import numpy as np
 import onnxruntime
@@ -14,7 +15,7 @@ from onnx import numpy_helper
 from insightface.app import FaceAnalysis
 from insightface.app.common import Face
 from insightface.utils.face_align import estimate_norm, norm_crop
-from .util import Frame, HAS_CUDA
+from .util import Frame, HAS_CUDA, PROVIDERS
 
 import cProfile
 import pstats
@@ -31,7 +32,9 @@ class FaceSwap:
         signal.signal(signal.SIGINT, self.signal_handler)
 
         # Face analysis
-        self.face_analyser = FaceAnalysis(name="buffalo_l", root="./")
+        self.face_analyser = FaceAnalysis(
+            name="buffalo_l", root="./", providers=PROVIDERS
+        )
         self.face_analyser.prepare(ctx_id=0)
 
         # Corse face swap
@@ -43,11 +46,7 @@ class FaceSwap:
         self.input_std = 255.0
         self.session = onnxruntime.InferenceSession(
             self.inswapper_model_file,
-            providers=(
-                ["CUDAExecutionProvider", "CPUExecutionProvider"]
-                if HAS_CUDA
-                else ["CPUExecutionProvider"]
-            ),
+            providers=PROVIDERS,
             provider_options=None,
         )
         self.inputs = self.session.get_inputs()
@@ -185,6 +184,8 @@ class FaceSwap:
         return self.face_analyser.get(img)
 
     def get_face(self, image_path: str) -> Optional[Face]:
+        if not os.path.exists(image_path):
+            raise Exception(f"File {image_path} does not exist")
         if faces := self.get_faces(cv2.imread(image_path)):
             return faces[0]
         raise Exception("No face found")

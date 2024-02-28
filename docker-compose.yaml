@@ -1,0 +1,17 @@
+version: '3'
+services:
+  crappy-face-swap:
+    build: .
+    image: crappy-face-swap:latest
+    ports:
+      - "5000:5000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - .:/app
+

@@ -4,11 +4,9 @@ import sys
 import logging
 from typing import List, Optional, Tuple
 
-from insightface.app.common import Face
-
 from crap_code.image import FaceSwap
 from crap_code.video import MediaDirector
-from crap_code.util import Frame, is_image, is_video, normalize_path
+from crap_code.util import is_image, is_video, normalize_path
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -116,7 +114,7 @@ class Operator:
         face_name = source_path.split(os.path.sep)[-1].split(".")[0]
         out_filename = os.path.join(self.output_dir, f"{face_name}_{file}")
         director = MediaDirector(self.swapper, source_path, in_filename, out_filename)
-        director.run_single()
+        director.run()
 
     def process(self, face_path, target_path):
         target_path = normalize_path(target_path)

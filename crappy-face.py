@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
-
-import os
 import sys
-import cv2
 import argparse
 import debugpy
 import logging
-from typing import Optional
 
 from crap_code.operations import Operator
-from crap_code.image import FaceSwap
-from crap_code.util import exit_with_error, is_image, is_video, normalize_path
-from crap_code.video import MediaDirector
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
+
+def exit_with_error(msg: str):
+    logger.error(f"Error: {msg}")
+    sys.exit(1)
 
 
 if __name__ == "__main__":
