@@ -35,7 +35,7 @@ class FaceSwap:
         self.face_analyser = FaceAnalysis(
             name="buffalo_l", root="./", providers=PROVIDERS
         )
-        self.face_analyser.prepare(ctx_id=0)
+        self.face_analyser.prepare(ctx_id=0, det_thresh=0.5)
 
         # Corse face swap
         self.inswapper_model_file = "models/inswapper_128.onnx"
@@ -58,6 +58,7 @@ class FaceSwap:
         self.output_shape = self.outputs[0].shape
         self.input_shape = self.inputs[0].shape
         self.input_size = tuple(self.input_shape[2:4][::-1])
+        self.fill_scale = 1.1
 
         # Upscale face
         self.scale_lock = threading.Lock()
@@ -121,7 +122,7 @@ class FaceSwap:
         bgr_fake = np.clip(255 * img_fake, 0, 255).astype(np.uint8)[:, :, ::-1]
         return bgr_fake
 
-    def fill_face(self, target_face: Face, img_mask: Frame, scale: float = 1.0):
+    def fill_face(self, target_face: Face, img_mask: Frame):
         # Face KPS is 5x2 array of x,y coordinates
         # Left eye, right eye, nose, left mouth, right mouth
 
@@ -133,15 +134,15 @@ class FaceSwap:
 
         hull_points = cv2.convexHull(target2crop_landmark_2d_106)
 
-        if scale != 1.0:
+        if self.fill_scale != 1.0:
             center = np.mean(hull_points, axis=0)
             translated_points = hull_points - center
-            scaled_points = translated_points * scale
+            scaled_points = translated_points * self.fill_scale
             hull_points = scaled_points + center
             hull_points[hull_points >= img_mask.shape[0]] = img_mask.shape[0] - 1
             hull_points[hull_points < 0] = 0
             target2crop_kps = target2crop_kps - center
-            target2crop_kps = target2crop_kps * scale
+            target2crop_kps = target2crop_kps * self.fill_scale
             target2crop_kps = target2crop_kps + center
             target2crop_kps[target2crop_kps >= img_mask.shape[0]] = (
                 img_mask.shape[0] - 1
@@ -150,7 +151,7 @@ class FaceSwap:
 
         center_eye = np.mean(target2crop_kps[0:2], axis=0)
         center_mouth = np.mean(target2crop_kps[3:5], axis=0)
-        radius = int(0.7 * scale * np.linalg.norm(center_eye - center_mouth))
+        radius = int(0.7 * self.fill_scale * np.linalg.norm(center_eye - center_mouth))
 
         pts = np.array([hull_points], dtype=np.int32)
         cv2.fillPoly(img_mask, pts, (1, 1, 1))
@@ -173,7 +174,7 @@ class FaceSwap:
         bgr_target = norm_crop(target_frame, target_face.kps, side)
 
         img_mask = np.full((side, side), 0, dtype=np.float32)
-        self.fill_face(target_face, img_mask, 1.1)
+        self.fill_face(target_face, img_mask)
         blur = 2 * int(0.1 * side) + 1
         img_mask = cv2.GaussianBlur(img_mask, (blur, blur), 0)
         img_mask = np.reshape(img_mask, [side, side, 1])
@@ -208,3 +209,86 @@ class FaceSwap:
                 stats.print_stats(num)
             except Exception:
                 pass
+
+
+class CameraSwap(FaceSwap):
+    def __init__(self, camera_id: int, face_path: str, profile=True):
+        super().__init__(upscale=False, profile=profile)
+        self.fill_scale = 1.3
+        self.camera_id = camera_id
+        self.camera = cv2.VideoCapture(camera_id)
+        self.source_face = self.get_face(face_path)
+
+    def get_face(self, image_path: str) -> Optional[Face]:
+        if not os.path.exists(image_path):
+            raise Exception(f"File {image_path} does not exist")
+        if faces := super().get_faces(cv2.imread(image_path)):
+            return faces[0]
+        raise Exception("No face found")
+
+    def get_faces(self, img: Frame, max_num=0):
+        bboxes, kpss = self.face_analyser.det_model.detect(
+            img, max_num=max_num, metric="default"
+        )
+        if bboxes.shape[0] == 0:
+            return []
+        ret = []
+        for i in range(bboxes.shape[0]):
+            bbox = bboxes[i, 0:4]
+            det_score = bboxes[i, 4]
+            kps = None
+            if kpss is not None:
+                kps = kpss[i]
+            face = Face(bbox=bbox, kps=kps, det_score=det_score)
+            ret.append(face)
+        return ret
+
+    def fill_face(self, target_face: Face, img_mask: Frame):
+        # Face KPS is 5x2 array of x,y coordinates
+        # Left eye, right eye, nose, left mouth, right mouth
+
+        M = estimate_norm(target_face.kps, img_mask.shape[0])
+        target2crop_kps = cv2.transform(target_face.kps.reshape(1, -1, 2), M)[0]
+
+        hull_points = cv2.convexHull(target2crop_kps)
+
+        if self.fill_scale != 1.0:
+            center = np.mean(hull_points, axis=0)
+            translated_points = hull_points - center
+            scaled_points = translated_points * self.fill_scale
+            hull_points = scaled_points + center
+            hull_points[hull_points >= img_mask.shape[0]] = img_mask.shape[0] - 1
+            hull_points[hull_points < 0] = 0
+            target2crop_kps = target2crop_kps - center
+            target2crop_kps = target2crop_kps * self.fill_scale
+            target2crop_kps = target2crop_kps + center
+            target2crop_kps[target2crop_kps >= img_mask.shape[0]] = (
+                img_mask.shape[0] - 1
+            )
+            target2crop_kps[target2crop_kps < 0] = 0
+
+        center_eye = np.mean(target2crop_kps[0:2], axis=0)
+        center_mouth = np.mean(target2crop_kps[3:5], axis=0)
+        radius = int(0.7 * self.fill_scale * np.linalg.norm(center_eye - center_mouth))
+
+        pts = np.array([hull_points], dtype=np.int32)
+        cv2.fillPoly(img_mask, pts, (1, 1, 1))
+        cv2.circle(
+            img_mask,
+            (int(center_eye[0]), int(center_eye[1])),
+            radius,
+            (1, 1, 1),
+            -1,
+        )
+
+    def get_frame(self):
+        if self.camera is None:
+            self.camera = cv2.VideoCapture(self.camera_id)
+        success, frame = self.camera.read()
+        if success:
+            frame = cv2.resize(frame, (frame.shape[1] // 2, frame.shape[0] // 2))
+            self.swap_face(source_face=self.source_face, frame=frame)
+            return frame
+        self.camera.release()
+        self.camera = None
+        return None
