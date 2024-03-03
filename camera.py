@@ -14,6 +14,10 @@ app = Flask(__name__)
 
 # define a video capture object
 swapper = CameraSwap(int(sys.argv[1]), sys.argv[2], profile=True)
+frame = swapper.get_frame()
+if frame is not None:
+    print(frame.shape, frame.dtype, frame.min(), frame.max())
+    print(len(frame[frame > 50]), len(frame[frame > 150]), len(frame[frame > 220]))
 
 
 def next_frame():  # generate frame by frame from camera
@@ -43,4 +47,4 @@ def index():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=8080)
+    app.run(debug=False, port=8080)

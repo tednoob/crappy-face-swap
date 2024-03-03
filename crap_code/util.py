@@ -1,7 +1,7 @@
-import sys
 import logging
 import onnxruntime
 import numpy as np
+from sys import platform
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -16,7 +16,8 @@ HAS_GPU = HAS_CUDA or HAS_METAL
 
 def normalize_path(path: str) -> str:
     """Converts a Windows path to a WSL path if necessary."""
-    if ":" in path:
+    print("Platform:", platform, path)
+    if ":" in path and platform.startswith("linux"):
         parts = path.split(":", 1)
         drive = parts[0].lower()
         drive_path = parts[1].replace("\\", "/")

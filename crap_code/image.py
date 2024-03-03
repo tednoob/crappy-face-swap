@@ -110,22 +110,22 @@ class FaceSwap:
             (self.input_mean, self.input_mean, self.input_mean),
             swapRB=True,
         )
-        latent = source_face.normed_embedding.reshape((1, -1))
-        latent = np.dot(latent, self.emap)
-        latent /= np.linalg.norm(latent)
 
         pred = self.session.run(
-            self.output_names, {self.input_names[0]: blob, self.input_names[1]: latent}
+            self.output_names,
+            {self.input_names[0]: blob, self.input_names[1]: source_face.latent},
         )[0]
 
         img_fake = pred.transpose((0, 2, 3, 1))[0]
         bgr_fake = np.clip(255 * img_fake, 0, 255).astype(np.uint8)[:, :, ::-1]
         return bgr_fake
 
-    def fill_face(self, target_face: Face, img_mask: Frame):
+    def fill_face(self, target_face: Face, img_mask: Frame, fill_scale=None):
+        if fill_scale is None:
+            fill_scale = self.fill_scale
+
         # Face KPS is 5x2 array of x,y coordinates
         # Left eye, right eye, nose, left mouth, right mouth
-
         M = estimate_norm(target_face.kps, img_mask.shape[0])
         target2crop_kps = cv2.transform(target_face.kps.reshape(1, -1, 2), M)[0]
         target2crop_landmark_2d_106 = cv2.transform(
@@ -134,15 +134,15 @@ class FaceSwap:
 
         hull_points = cv2.convexHull(target2crop_landmark_2d_106)
 
-        if self.fill_scale != 1.0:
+        if fill_scale != 1.0:
             center = np.mean(hull_points, axis=0)
             translated_points = hull_points - center
-            scaled_points = translated_points * self.fill_scale
+            scaled_points = translated_points * fill_scale
             hull_points = scaled_points + center
             hull_points[hull_points >= img_mask.shape[0]] = img_mask.shape[0] - 1
             hull_points[hull_points < 0] = 0
             target2crop_kps = target2crop_kps - center
-            target2crop_kps = target2crop_kps * self.fill_scale
+            target2crop_kps = target2crop_kps * fill_scale
             target2crop_kps = target2crop_kps + center
             target2crop_kps[target2crop_kps >= img_mask.shape[0]] = (
                 img_mask.shape[0] - 1
@@ -151,7 +151,7 @@ class FaceSwap:
 
         center_eye = np.mean(target2crop_kps[0:2], axis=0)
         center_mouth = np.mean(target2crop_kps[3:5], axis=0)
-        radius = int(0.7 * self.fill_scale * np.linalg.norm(center_eye - center_mouth))
+        radius = int(0.7 * fill_scale * np.linalg.norm(center_eye - center_mouth))
 
         pts = np.array([hull_points], dtype=np.int32)
         cv2.fillPoly(img_mask, pts, (1, 1, 1))
@@ -182,7 +182,13 @@ class FaceSwap:
         self.warp(bgr_fake.astype(np.uint8), target_face, target_frame)
 
     def get_faces(self, img: Frame):
-        return self.face_analyser.get(img)
+        faces = self.face_analyser.get(img)
+        for face in faces:
+            latent = face.normed_embedding.reshape((1, -1))
+            latent = np.dot(latent, self.emap)
+            latent /= np.linalg.norm(latent)
+            face.latent = latent
+        return faces
 
     def get_face(self, image_path: str) -> Optional[Face]:
         if not os.path.exists(image_path):
@@ -211,13 +217,9 @@ class FaceSwap:
                 pass
 
 
-class CameraSwap(FaceSwap):
-    def __init__(self, camera_id: int, face_path: str, profile=True):
-        super().__init__(upscale=False, profile=profile)
-        self.fill_scale = 1.3
-        self.camera_id = camera_id
-        self.camera = cv2.VideoCapture(camera_id)
-        self.source_face = self.get_face(face_path)
+class RoughFaceSwap(FaceSwap):
+    def __init__(self, upscale=True, profile=True):
+        super().__init__(upscale=upscale, profile=profile)
 
     def get_face(self, image_path: str) -> Optional[Face]:
         if not os.path.exists(image_path):
@@ -243,24 +245,19 @@ class CameraSwap(FaceSwap):
             ret.append(face)
         return ret
 
-    def fill_face(self, target_face: Face, img_mask: Frame):
+    def fill_face(self, target_face: Face, img_mask: Frame, fill_scale=None):
+        if fill_scale is None:
+            fill_scale = self.fill_scale
         # Face KPS is 5x2 array of x,y coordinates
         # Left eye, right eye, nose, left mouth, right mouth
 
         M = estimate_norm(target_face.kps, img_mask.shape[0])
         target2crop_kps = cv2.transform(target_face.kps.reshape(1, -1, 2), M)[0]
 
-        hull_points = cv2.convexHull(target2crop_kps)
-
-        if self.fill_scale != 1.0:
-            center = np.mean(hull_points, axis=0)
-            translated_points = hull_points - center
-            scaled_points = translated_points * self.fill_scale
-            hull_points = scaled_points + center
-            hull_points[hull_points >= img_mask.shape[0]] = img_mask.shape[0] - 1
-            hull_points[hull_points < 0] = 0
+        center = np.mean(target2crop_kps, axis=0)
+        if fill_scale != 1.0:
             target2crop_kps = target2crop_kps - center
-            target2crop_kps = target2crop_kps * self.fill_scale
+            target2crop_kps = target2crop_kps * fill_scale
             target2crop_kps = target2crop_kps + center
             target2crop_kps[target2crop_kps >= img_mask.shape[0]] = (
                 img_mask.shape[0] - 1
@@ -269,17 +266,52 @@ class CameraSwap(FaceSwap):
 
         center_eye = np.mean(target2crop_kps[0:2], axis=0)
         center_mouth = np.mean(target2crop_kps[3:5], axis=0)
-        radius = int(0.7 * self.fill_scale * np.linalg.norm(center_eye - center_mouth))
+        radius = int(0.7 * fill_scale * np.linalg.norm(center_eye - center_mouth))
 
-        pts = np.array([hull_points], dtype=np.int32)
-        cv2.fillPoly(img_mask, pts, (1, 1, 1))
         cv2.circle(
             img_mask,
             (int(center_eye[0]), int(center_eye[1])),
-            radius,
+            (int(1.3 * radius)),
             (1, 1, 1),
             -1,
         )
+        cv2.circle(
+            img_mask,
+            (int(center[0]), int(center[1])),
+            int(1.4 * radius),
+            (1, 1, 1),
+            -1,
+        )
+        for point in target2crop_kps:
+            cv2.circle(
+                img_mask,
+                (int(point[0]), int(point[1])),
+                int(0.8 * radius),
+                (1, 1, 1),
+                -1,
+            )
+        cv2.circle(
+            img_mask,
+            (int(center_mouth[0]), int(center_mouth[1])),
+            int(1.4 * radius),
+            (1, 1, 1),
+            -1,
+        )
+
+
+class CameraSwap(RoughFaceSwap):
+    def __init__(self, camera_id: int, face_path: str, profile=True):
+        super().__init__(upscale=False, profile=profile)
+        self.camera_id = camera_id
+        self.camera = cv2.VideoCapture(self.camera_id)
+        if sys.platform.startswith("linux"):
+            self.camera.set(
+                cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc("M", "J", "P", "G")
+            )
+        if not self.camera.isOpened():
+            self.camera.release()
+            raise Exception(f"Camera {camera_id} not found")
+        self.source_face = self.get_face(face_path)
 
     def get_frame(self):
         if self.camera is None:

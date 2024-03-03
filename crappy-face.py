@@ -53,6 +53,13 @@ if __name__ == "__main__":
         default=False,
         help="Enable the debugger [default: False]",
     )
+    parser.add_argument(
+        "-r",
+        "--rough",
+        action="store_true",
+        default=False,
+        help="Dodgy face detection in favor of speed [default: False]",
+    )
 
     args = parser.parse_args()
     if args.debug:
@@ -70,7 +77,4 @@ if __name__ == "__main__":
     elif args.no_upscale:
         upscale = False
 
-    try:
-        Operator(upscale, args.profile).process(args.face, args.target)
-    except Exception as e:
-        exit_with_error(str(e))
+    Operator(upscale, args.profile, rough=args.rough).process(args.face, args.target)

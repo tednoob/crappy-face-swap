@@ -4,7 +4,7 @@ import sys
 import logging
 from typing import List, Optional, Tuple
 
-from crap_code.image import FaceSwap
+from crap_code.image import RoughFaceSwap, FaceSwap
 from crap_code.video import MediaDirector
 from crap_code.util import is_image, is_video, normalize_path
 
@@ -13,8 +13,11 @@ logging.basicConfig(level=logging.INFO)
 
 
 class Operator:
-    def __init__(self, upscale: bool, profile: bool):
-        self.swapper = FaceSwap(upscale=upscale, profile=profile)
+    def __init__(self, upscale: bool, profile: bool, rough=False):
+        if rough:
+            self.swapper = RoughFaceSwap(upscale=upscale, profile=profile)
+        else:
+            self.swapper = FaceSwap(upscale=upscale, profile=profile)
         self.output_dir = "output"
         self.faces_dir = "faces"
 
