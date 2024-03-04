@@ -2,6 +2,8 @@
 import os
 import cv2
 import sys
+import time
+from threading import Thread
 from flask import Flask, render_template, Response
 from crap_code.image import CameraSwap
 
@@ -13,21 +15,20 @@ if not os.path.exists(face_path):
 app = Flask(__name__)
 
 # define a video capture object
+# https://github.com/dorssel/usbipd-win/wiki/WSL-support
+# usbipd attach --wsl --busid 5-2
+# usbipd detach --busid 5-2
 swapper = CameraSwap(int(sys.argv[1]), sys.argv[2], profile=True)
-frame = swapper.get_frame()
-if frame is not None:
-    print(frame.shape, frame.dtype, frame.min(), frame.max())
-    print(len(frame[frame > 50]), len(frame[frame > 150]), len(frame[frame > 220]))
+swapper.start()
 
 
 def next_frame():  # generate frame by frame from camera
     while True:
-        # Capture frame-by-frame
-        frame = swapper.get_frame()  # read the camera frame
-        if frame is None:
-            break
+        time.sleep(0.01)
+        if swapper.output_frame is None:
+            continue
         else:
-            _, buffer = cv2.imencode(".jpg", frame)
+            _, buffer = cv2.imencode(".jpg", swapper.output_frame)
             yield (
                 b"--frame\r\n"
                 b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"

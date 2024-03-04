@@ -1,21 +1,19 @@
 import os
 import sys
 import cv2
+import time
 import signal
 import logging
 import threading
 from typing import Optional
 
 import numpy as np
-import onnxruntime
-import onnx
 
 from gfpgan.utils import GFPGANer
-from onnx import numpy_helper
 from insightface.app import FaceAnalysis
 from insightface.app.common import Face
 from insightface.utils.face_align import estimate_norm, norm_crop
-from .util import Frame, HAS_CUDA, PROVIDERS
+from crap_code.util import Frame, OnnxGfpGan, PROVIDERS, OnnxInSwapper
 
 import cProfile
 import pstats
@@ -27,6 +25,7 @@ logging.basicConfig(level=logging.INFO)
 
 class FaceSwap:
     def __init__(self, upscale: bool = True, profile: bool = False):
+        self.running = False
         self.profile = profile
         self.profiler = cProfile.Profile()
         signal.signal(signal.SIGINT, self.signal_handler)
@@ -38,51 +37,28 @@ class FaceSwap:
         self.face_analyser.prepare(ctx_id=0, det_thresh=0.5)
 
         # Corse face swap
-        self.inswapper_model_file = "models/inswapper_128.onnx"
-        model = onnx.load(self.inswapper_model_file)
-        graph = model.graph
-        self.emap = numpy_helper.to_array(graph.initializer[-1])
-        self.input_mean = 0.0
-        self.input_std = 255.0
-        self.session = onnxruntime.InferenceSession(
-            self.inswapper_model_file,
-            providers=PROVIDERS,
-            provider_options=None,
-        )
-        self.inputs = self.session.get_inputs()
-        self.input_names = [i.name for i in self.inputs]
-        self.outputs = self.session.get_outputs()
-        self.output_names = [o.name for o in self.outputs]
-        assert self.output_names == ["output"]
-        assert self.input_names == ["target", "source"]
-        self.output_shape = self.outputs[0].shape
-        self.input_shape = self.inputs[0].shape
-        self.input_size = tuple(self.input_shape[2:4][::-1])
+        self.inswapper = OnnxInSwapper("models/inswapper_128.onnx")
         self.fill_scale = 1.1
 
         # Upscale face
         self.scale_lock = threading.Lock()
         if upscale:
-            self.upscaler = GFPGANer(
-                model_path="models/GFPGANv1.4.pth",
-                upscale=1,
-                device="cuda" if HAS_CUDA else "cpu",
-            )
+            self.onnx_upscaler = OnnxGfpGan("models/GFPGANv1.4.onnx")
         else:
             self.upscaler = None
 
-    def signal_handler(self, signal, frame):
+    def stop(self):
+        self.running = False
+
+    def signal_handler(self, *argv, **kwargs):
+        self.stop()
         self.print_stats()
         print("\nprogram exiting gracefully")
         sys.exit(0)
 
     def upscale(self, bgr_fake: Frame) -> Frame:
-        if self.upscaler is not None:
-            with self.scale_lock:
-                _, restored_faces, _ = self.upscaler.enhance(
-                    bgr_fake, has_aligned=True, paste_back=False
-                )
-                return restored_faces[0]
+        if self.onnx_upscaler is not None:
+            return self.onnx_upscaler.run(input=bgr_fake)
         return bgr_fake
 
     def warp(self, img: Frame, target_face: Face, target_img: Frame) -> Frame:
@@ -100,25 +76,10 @@ class FaceSwap:
     def inswap(
         self, target_frame: Frame, target_face: Face, source_face: Face
     ) -> Frame:
-        actual_image = norm_crop(target_frame, target_face.kps, self.input_size[0])
-
-        # https://answers.opencv.org/question/208377/output-of-blobfromimage-function/
-        blob = cv2.dnn.blobFromImage(
-            actual_image,
-            1.0 / self.input_std,
-            self.input_size,
-            (self.input_mean, self.input_mean, self.input_mean),
-            swapRB=True,
+        actual_image = norm_crop(
+            target_frame, target_face.kps, self.inswapper.input_size[0]
         )
-
-        pred = self.session.run(
-            self.output_names,
-            {self.input_names[0]: blob, self.input_names[1]: source_face.latent},
-        )[0]
-
-        img_fake = pred.transpose((0, 2, 3, 1))[0]
-        bgr_fake = np.clip(255 * img_fake, 0, 255).astype(np.uint8)[:, :, ::-1]
-        return bgr_fake
+        return self.inswapper.run(target=actual_image, source=source_face.latent)
 
     def fill_face(self, target_face: Face, img_mask: Frame, fill_scale=None):
         if fill_scale is None:
@@ -170,7 +131,9 @@ class FaceSwap:
         bgr_fake: Frame,
     ) -> Frame:
         """Operates in place on frame."""
-        side = bgr_fake.shape[0]
+        side = 512
+        if bgr_fake.shape[0] != side:
+            bgr_fake = cv2.resize(bgr_fake, (side, side))
         bgr_target = norm_crop(target_frame, target_face.kps, side)
 
         img_mask = np.full((side, side), 0, dtype=np.float32)
@@ -185,7 +148,7 @@ class FaceSwap:
         faces = self.face_analyser.get(img)
         for face in faces:
             latent = face.normed_embedding.reshape((1, -1))
-            latent = np.dot(latent, self.emap)
+            latent = np.dot(latent, self.inswapper.emap)
             latent /= np.linalg.norm(latent)
             face.latent = latent
         return faces
@@ -266,7 +229,7 @@ class RoughFaceSwap(FaceSwap):
 
         center_eye = np.mean(target2crop_kps[0:2], axis=0)
         center_mouth = np.mean(target2crop_kps[3:5], axis=0)
-        radius = int(0.7 * fill_scale * np.linalg.norm(center_eye - center_mouth))
+        radius = int(0.5 * fill_scale * np.linalg.norm(center_eye - center_mouth))
 
         cv2.circle(
             img_mask,
@@ -278,7 +241,7 @@ class RoughFaceSwap(FaceSwap):
         cv2.circle(
             img_mask,
             (int(center[0]), int(center[1])),
-            int(1.4 * radius),
+            int(1.6 * radius),
             (1, 1, 1),
             -1,
         )
@@ -286,7 +249,7 @@ class RoughFaceSwap(FaceSwap):
             cv2.circle(
                 img_mask,
                 (int(point[0]), int(point[1])),
-                int(0.8 * radius),
+                int(0.5 * radius),
                 (1, 1, 1),
                 -1,
             )
@@ -300,11 +263,15 @@ class RoughFaceSwap(FaceSwap):
 
 
 class CameraSwap(RoughFaceSwap):
-    def __init__(self, camera_id: int, face_path: str, profile=True):
+    # https://github.com/dorssel/usbipd-win/wiki/WSL-support
+    def __init__(self, camera_id: int, face_path: str, profile=False):
         super().__init__(upscale=False, profile=profile)
         self.camera_id = camera_id
         self.camera = cv2.VideoCapture(self.camera_id)
+        self.resize = 2
         if sys.platform.startswith("linux"):
+            cv2.setLogLevel(0)
+            self.resize = 1
             self.camera.set(
                 cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc("M", "J", "P", "G")
             )
@@ -312,15 +279,45 @@ class CameraSwap(RoughFaceSwap):
             self.camera.release()
             raise Exception(f"Camera {camera_id} not found")
         self.source_face = self.get_face(face_path)
+        self.input_data = (0, None, None)
+        self.output_frame = None
+        self.desired_fps = 25
 
-    def get_frame(self):
-        if self.camera is None:
-            self.camera = cv2.VideoCapture(self.camera_id)
-        success, frame = self.camera.read()
-        if success:
-            frame = cv2.resize(frame, (frame.shape[1] // 2, frame.shape[0] // 2))
-            self.swap_face(source_face=self.source_face, frame=frame)
-            return frame
+    def read_camera(self):
+        frame_count = 0
+        while self.running:
+            frame_count += 1
+            tic = time.time()
+            success, frame = self.camera.read()
+            if success:
+                frame = cv2.resize(
+                    frame,
+                    (frame.shape[1] // self.resize, frame.shape[0] // self.resize),
+                )
+                faces = self.get_faces(frame)
+                self.input_data = (frame_count, frame, faces)
+            toc = time.time()
+            time.sleep(max(0, 1 / self.desired_fps - (toc - tic)))
+
+    def process_frame(self):
+        prev_frame_count = 0
+        while self.running:
+            tic = time.time()
+            frame_count, frame, faces = self.input_data
+            if frame is not None and frame_count != prev_frame_count:
+                for target_face in faces:
+                    bgr_fake = self.inswap(frame, target_face, self.source_face)
+                    self.combine(frame, target_face, bgr_fake)
+                prev_frame_count = frame_count
+                self.output_frame = frame
+            toc = time.time()
+            time.sleep(max(0, 1 / self.desired_fps - (toc - tic)))
+
+    def start(self):
+        self.running = True
+        threading.Thread(target=self.read_camera).start()
+        threading.Thread(target=self.process_frame).start()
+
+    def stop(self):
+        super().stop()
         self.camera.release()
-        self.camera = None
-        return None
