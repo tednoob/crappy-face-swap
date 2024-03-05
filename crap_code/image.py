@@ -9,7 +9,6 @@ from typing import Optional
 
 import numpy as np
 
-from gfpgan.utils import GFPGANer
 from insightface.app import FaceAnalysis
 from insightface.app.common import Face
 from insightface.utils.face_align import estimate_norm, norm_crop
@@ -45,7 +44,7 @@ class FaceSwap:
         if upscale:
             self.onnx_upscaler = OnnxGfpGan("models/GFPGANv1.4.onnx")
         else:
-            self.upscaler = None
+            self.onnx_upscaler = None
 
     def stop(self):
         self.running = False

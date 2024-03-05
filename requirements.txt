@@ -1,7 +1,7 @@
 debugpy
 ffmpeg-python
 flask
-gfpgan
 insightface
 onnxruntime
+onnxruntime-gpu
 opencv-python
