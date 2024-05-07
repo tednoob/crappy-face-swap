@@ -26,7 +26,7 @@ No. This barely(and rarely) runs on my machine, and I don't think it is worth th
 
 # Models
 
-When I run code I do not really care, but friends do not let friends run models with arbitrary code execution. For that reason I have tried what I can to run directly with onnx-model files. I no longer remember where I found the model files I use, but I found that [treksis on hugging face](https://huggingface.co/treksis/buffalo_l/tree/main) have the same versions. The large buffalo network comes directly from [InsightFace](https://github.com/deepinsight/insightface/releases/). They expose this as insightface.utils.storage.BASE_REPO_URL, but I do not like automatic downloads.
+When I run code I do not really care, but friends do not let friends run models with arbitrary code execution. For that reason I have tried what I can to run directly with onnx-model files. I no longer remember where I found the model files I use. The large buffalo network comes directly from [InsightFace](https://github.com/deepinsight/insightface/releases/). They expose this as insightface.utils.storage.BASE_REPO_URL, but I do not like automatic downloads.
 You can build GFPGANv1.4.onnx from the official pth source using [xuanandsix's tool](https://github.com/xuanandsix/GFPGAN-onnxruntime-demo), if you do this care that the input/output names will be different from what crappy-face-swap expects.
 
 ```
