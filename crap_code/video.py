@@ -21,7 +21,6 @@ class MediaDirector(object):
     def __init__(
         self,
         swapper: "FaceSwap",
-        source_path: str,
         in_filename: str,
         out_filename: str,
     ):
@@ -40,7 +39,6 @@ class MediaDirector(object):
         rate = self.video_info["r_frame_rate"].split("/", 1)
         self.framerate = float(rate[0]) / float(rate[1])
 
-        self.source_face = self.swapper.get_face(source_path)
         self.frame_buffer_lock: threading.Lock = threading.Lock()
         self._input_buffer = []
         self._output_buffer = []
@@ -120,7 +118,7 @@ class MediaDirector(object):
                 return None
 
     def process_frame(self, frame_no: int, frame: Frame):
-        self.swapper.swap_face(self.source_face, frame)
+        self.swapper.swap_face(frame)
         self.append_output_frame(frame_no, frame)
 
     def write_frame(self, frame):
@@ -190,7 +188,7 @@ class MediaDirector(object):
                 logger.info("End of input stream")
                 break
             tic = time.time()
-            self.swapper.swap_face(self.source_face, frame)
+            self.swapper.swap_face(frame)
             process += time.time() - tic
 
             tic = time.time()

@@ -165,3 +165,10 @@ cython_debug/
 /output/
 /models/
 /gfpgan/
+
+# MacOS
+.DS_Store
+
+# Windows
+Thumbs.db
+desktop.ini
