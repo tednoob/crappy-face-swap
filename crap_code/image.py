@@ -5,7 +5,7 @@ import time
 import signal
 import logging
 import threading
-from typing import Optional
+from typing import List, Optional
 
 import numpy as np
 
@@ -20,6 +20,30 @@ import pstats
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
+
+class SourceFace:
+    def __init__(
+        self,
+        swapper: "FaceSwap",
+        source_path: str,
+        reference_path: Optional[str] = None,
+    ):
+        self.source_path = source_path
+        self.face: Face = swapper.get_face(source_path)
+        self.reference_face = None
+        if reference_path:
+            self.reference_face = swapper.get_face(reference_path)
+        self.face_name = source_path.split(os.path.sep)[-1].split(".")[0]
+
+    def distance(self, other: "Face") -> float:
+        if self.reference_face is not None:
+            return np.linalg.norm(self.reference_face.embedding - other.embedding)
+        return np.linalg.norm(self.face.embedding - other.embedding)
+
+    @property
+    def latent(self):
+        return self.face.latent
 
 
 class FaceSwap:
@@ -45,6 +69,30 @@ class FaceSwap:
             self.onnx_upscaler = OnnxGfpGan("models/GFPGANv1.4.onnx")
         else:
             self.onnx_upscaler = None
+
+        # Faces
+        self.source_faces: List[SourceFace] = []
+
+    def add_source_face(
+        self, source_path: str, reference_face: Optional[str] = None
+    ) -> SourceFace:
+        face = SourceFace(self, source_path, reference_face)
+        self.source_faces.append(face)
+        return face
+
+    def get_source_face(self, reference_face) -> SourceFace:
+        if len(self.source_faces) == 1:
+            return self.source_faces[0]
+        else:
+            # Find the closest face to the reference face
+            closest_face = self.source_faces[0]
+            min_distance = self.source_faces[0].distance(reference_face)
+            for source_face in self.source_faces[1:]:
+                distance = source_face.distance(reference_face)
+                if distance < min_distance:
+                    min_distance = distance
+                    closest_face = source_face
+            return closest_face
 
     def stop(self):
         self.running = False
@@ -143,7 +191,7 @@ class FaceSwap:
         bgr_fake = img_mask * bgr_fake + (1 - img_mask) * bgr_target.astype(np.float32)
         self.warp(bgr_fake.astype(np.uint8), target_face, target_frame)
 
-    def get_faces(self, img: Frame):
+    def locate_faces(self, img: Frame) -> List[Face]:
         faces = self.face_analyser.get(img)
         for face in faces:
             latent = face.normed_embedding.reshape((1, -1))
@@ -152,19 +200,24 @@ class FaceSwap:
             face.latent = latent
         return faces
 
-    def get_face(self, image_path: str) -> Optional[Face]:
+    def get_face(self, image_path: str) -> Face:
         if not os.path.exists(image_path):
             raise Exception(f"File {image_path} does not exist")
-        if faces := self.get_faces(cv2.imread(image_path)):
+        if faces := self.locate_faces(cv2.imread(image_path)):
             return faces[0]
         raise Exception("No face found")
 
-    def swap_face(self, source_face: Face, frame: Frame) -> Frame:
+    def swap_face(self, frame: Frame, source_face: Optional[Face] = None) -> Frame:
         """Operates in place on frame."""
         if self.profile:
             self.profiler.enable()
-        for target_face in self.get_faces(frame):
-            bgr_fake = self.inswap(frame, target_face, source_face)
+        for target_face in self.locate_faces(frame):
+            if source_face is not None:
+                bgr_fake = self.inswap(frame, target_face, source_face)
+            else:
+                bgr_fake = self.inswap(
+                    frame, target_face, self.get_source_face(target_face)
+                )
             bgr_fake = self.upscale(bgr_fake)
             self.combine(frame, target_face, bgr_fake)
         if self.profile:
@@ -183,14 +236,7 @@ class RoughFaceSwap(FaceSwap):
     def __init__(self, upscale=True, profile=True):
         super().__init__(upscale=upscale, profile=profile)
 
-    def get_face(self, image_path: str) -> Optional[Face]:
-        if not os.path.exists(image_path):
-            raise Exception(f"File {image_path} does not exist")
-        if faces := super().get_faces(cv2.imread(image_path)):
-            return faces[0]
-        raise Exception("No face found")
-
-    def get_faces(self, img: Frame, max_num=0):
+    def locate_faces(self, img: Frame, max_num=0):
         bboxes, kpss = self.face_analyser.det_model.detect(
             img, max_num=max_num, metric="default"
         )
@@ -293,7 +339,7 @@ class CameraSwap(RoughFaceSwap):
                     frame,
                     (frame.shape[1] // self.resize, frame.shape[0] // self.resize),
                 )
-                faces = self.get_faces(frame)
+                faces = self.locate_faces(frame)
                 self.input_data = (frame_count, frame, faces)
             toc = time.time()
             time.sleep(max(0, 1 / self.desired_fps - (toc - tic)))
@@ -308,7 +354,7 @@ class CameraSwap(RoughFaceSwap):
                     bgr_fake = self.inswap(frame, target_face, self.source_face)
                     self.combine(frame, target_face, bgr_fake)
                 prev_frame_count = frame_count
-                self.output_frame = frame
+                self.output_frame = cv2.flip(frame, 1)
             toc = time.time()
             time.sleep(max(0, 1 / self.desired_fps - (toc - tic)))
 

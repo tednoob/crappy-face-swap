@@ -1,6 +1,5 @@
 import os
 import cv2
-import sys
 import logging
 from typing import List, Optional, Tuple
 
@@ -33,14 +32,14 @@ class Operator:
         raise ValueError(f"Face {face_name} not found")
 
     def get_faces(
-        self, source_path: Optional[str], target_path: str
+        self, face_path: Optional[str], target_path: str
     ) -> List[Tuple[str, str]]:
         target_name = os.path.join(target_path).split(os.path.sep)[-1]
         target_type = target_name.split(".")[-1]
         target_name = target_name.replace(f".{target_type}", "")
 
-        if source_path is not None:
-            source_path = self.get_face_path(source_path)
+        if face_path is not None:
+            source_path = self.get_face_path(face_path)
 
             if not is_image(source_path):
                 raise ValueError(f"{source_path} is not an image")
@@ -63,11 +62,12 @@ class Operator:
 
         return targets
 
-    def process_dir(self, source_path, input_path):
+    def process_dir(self, face_path, input_path):
         if not os.path.isdir(input_path):
             raise ValueError(f"{input_path} is not a directory")
 
-        source_path = self.get_face_path(source_path)
+        source_path = self.get_face_path(face_path)
+        self.swapper.add_source_face(source_path)
         if source_path is None:
             raise ValueError(f"{source_path} is required when processing video")
 
@@ -88,21 +88,21 @@ class Operator:
                     logger.info(f"Processing {input_file}")
                     try:
                         frame = cv2.imread(input_file)
-                        self.swapper.swap_face(source_face, frame)
+                        self.swapper.swap_face(frame, source_face)
                         cv2.imwrite(output_file, frame)
                     except Exception:
                         logger.exception(f"Error processing {input_file}")
 
-    def process_image(self, source_path: Optional[str], target_path: str):
+    def process_image(self, face_path: Optional[str], target_path: str):
         # mogrify -format jpg *.HEIC
         if not is_image(target_path):
             raise ValueError(f"{target_path} is not an image")
 
         target_frame = cv2.imread(f"{target_path}")
-        for source_path, output_path in self.get_faces(source_path, target_path):
+        for source_path, output_path in self.get_faces(face_path, target_path):
             current_target_frame = target_frame.copy()
             source_face = self.swapper.get_face(source_path)
-            self.swapper.swap_face(source_face, current_target_frame)
+            self.swapper.swap_face(current_target_frame, source_face)
             cv2.imwrite(output_path, current_target_frame)
 
     def process_video(self, face_path: Optional[str], in_filename: str):
@@ -110,13 +110,11 @@ class Operator:
         # ffmpeg -i input.mp4 -ss '0:10:00' -t "0:02:00" -c copy output.mp4  # Cut between 0:10:0 and 0:12:00
         if not is_video(in_filename):
             raise ValueError(f"{in_filename} is not a video")
-        source_path = self.get_face_path(face_path)
-        if source_path is None:
-            raise ValueError(f"{face_path} is required when processing video")
+
+        source_face = self.swapper.add_source_face(self.get_face_path(face_path))
         file = os.path.join(in_filename).split(os.path.sep)[-1]
-        face_name = source_path.split(os.path.sep)[-1].split(".")[0]
-        out_filename = os.path.join(self.output_dir, f"{face_name}_{file}")
-        director = MediaDirector(self.swapper, source_path, in_filename, out_filename)
+        out_filename = os.path.join(self.output_dir, f"{source_face.face_name}_{file}")
+        director = MediaDirector(self.swapper, in_filename, out_filename)
         director.run()
 
     def process(self, face_path, target_path):
